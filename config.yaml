@@ -1,0 +1,13 @@
+DATABASE_HOST: "https://6b76175fed2e.arangodb.cloud:8529"
+DATABASE_USERNAME: "root"
+DATABASE_PASSWORD: "UyWnd2m5NCBatEf1lwhi"
+DATABASE_NAME: "_system"
+GRAPH_NAME: "OPEN_INTELLIGENCE"
+
+openai_model: "o3-mini"
+openai_embedder: "text-embedding-3-small"
+top_k: 10
+MAX_ATTEMPTS: 3
+VERBOSE: true
+
+FEEDBACK: ""

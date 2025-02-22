@@ -1,0 +1,7 @@
+nx-arangodb 
+arango-datasets
+#nx-cugraph-cu12 --extra-index-url https://pypi.nvidia.com  # Requires CUDA-capable GPU
+langchain 
+langchain-community 
+langchain-openai 
+langgraph
