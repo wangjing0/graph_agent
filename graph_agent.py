@@ -15,7 +15,7 @@ from langchain_community.chains.graph_qa.arangodb import ArangoGraphQAChain
 from langchain_core.tools import tool
 import lancedb
 from lancedb.pydantic import LanceModel, Vector
-from lancedb.embeddings import EmbeddingFunctionRegistry,get_registry
+from lancedb.embeddings import EmbeddingFunctionRegistry, get_registry
 import colorlog, logging
 from tqdm import trange
 with open("config.yaml", "r") as f:
