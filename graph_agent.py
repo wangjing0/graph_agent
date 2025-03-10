@@ -37,6 +37,8 @@ ch = logging.StreamHandler()
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+
+
 class GraphAgent:
     def __init__(self):
         # remote db
@@ -59,11 +61,15 @@ class GraphAgent:
 
         # agent
         self.history = []
-        self.agent = create_react_agent(self.llm, 
-                                        tools=[StructuredTool.from_function(self.text_to_nx_algorithm_to_text), 
-                                                 StructuredTool.from_function(self.text_to_aql_to_text), 
-                                                 StructuredTool.from_function(self.whoami),
-                                                 StructuredTool.from_function(self.vector_qa)])
+        self.tools = [{'name': 'whoami', 'func': self.whoami, 'description': self.whoami.__doc__},
+                      {'name': 'vector_qa', 'func': self.vector_qa, 'description': self.vector_qa.__doc__},
+                      {'name': 'aql_qa', 'func': self.aql_qa, 'description': self.aql_qa.__doc__},
+                      {'name': 'nx_algorithm_coding_qa', 'func': self.nx_algorithm_coding_qa, 'description': self.nx_algorithm_coding_qa.__doc__}]
+        
+        self.agent = create_react_agent(self.llm, tools=[StructuredTool.from_function(tool['func']) for tool in self.tools])
+
+        self.db = lancedb.connect(uri='../data/temp')
+        self.top_k = CONFIG["top_k"]
         # vector db
         class Schema(LanceModel):
             _id: str | int # primary key for the node
@@ -71,18 +77,21 @@ class GraphAgent:
             metadata: str | list[str]  # what to search
             #embedding: list[float] = None  # pre-computed embedding, such as image embedding
             vector: Vector(self.text_embedder.ndims()) = self.text_embedder.VectorField() # output embedding from the 'description' field
-                
-        self.db = lancedb.connect(uri='../data/temp')
-        self.table = self.db.create_table(CONFIG["GRAPH_NAME"], schema=Schema, on_bad_vectors='drop', mode="overwrite")
-        self.top_k = CONFIG["top_k"]
+        self.Schema = Schema
         #self.create_vector_db()
 
+    def load_vector_db(self):
+
+        self.table = self.db[CONFIG["GRAPH_NAME"]]
+        return
+    
     def create_vector_db(self):
         # create vector db
         # run this after G_adb is created
-
+        self.table = self.db.create_table(CONFIG["GRAPH_NAME"], schema=self.Schema, on_bad_vectors='drop', mode="overwrite")
         logger.info("Creating vector database")
         df = pandas.DataFrame([data for _, data in self.G_adb.nodes(data=True)])
+        #df.drop_duplicates(subset=['_key'], keep='first', inplace=True, ignore_index=True)
         df['node_type'] = df['_id'].apply(lambda x: x.split('/')[0])
         col_names = df.columns.tolist()
 
@@ -109,25 +118,17 @@ class GraphAgent:
     def whoami(self, query: str):
         """
         I am a graph agent.
-        An overview of the database collections and graph schema you can find here:
+        An overview of the database collections and graph schema,
+        and tools available to you.
         """
-        return str(self.arango_graph.schema)
+        return f"Here is the schema of the graph: {str(self.arango_graph.schema)} \n\n Here are the tools available to you: {str([(tool['name'], tool['description']) for tool in self.tools])}"
 
     #@tool
     def vector_qa(self, query:str):
         """ This tool is available to invoke the vector search on all nodes.
         semantic similarity between the query and the description or metadata of nodes.
         """
-
-        retrieved_nodes = (self.table
-                    .search(query=query, query_type='hybrid')
-                    #.rerank(reranker=reranker) # not used for now, slow down the search
-                    .limit(self.top_k)
-                    .to_pandas()
-                    .drop(columns=['vector', '_relevance_score'])
-                    #.drop_duplicates(subset=['_id'], keep='first')
-                    )
-        
+        retrieved_nodes = self.vector_search(query)
         
         retrieved_context = str(retrieved_nodes.to_csv(index=False, sep='|'))
         
@@ -135,21 +136,24 @@ class GraphAgent:
             You are a helpful assistant that can answer questions about a graph.
             The retrieved context are a list of nodes and their descriptions.
             Answer the question based on the context only. and cite the source.
-
-            Question: 
+            If the answer is not in the context, say so.
+            Output a multi-line response and citations, with each citation referencing the source if applicable.
+                                
+            Question:
             {query}
             Context: 
             {retrieved_context}
             Your response:
         """).content
-        return response
+
+        return response, {'context': retrieved_nodes.to_dict()}
     
     #@tool
-    def text_to_aql_to_text(self, query: str):
+    def aql_qa(self, query: str):
         """This tool is available to invoke the
         ArangoGraphQAChain object, which enables you to
-        translate a Natural Language Query into AQL, execute
-        the query, and translate the result back into Natural Language.
+        translate a Natural Language Query into AQL, a query language similar to Neo4j Cypher, 
+        execute the query, and translate the result back into Natural Language.
         """
 
         chain = ArangoGraphQAChain.from_llm(
@@ -160,10 +164,10 @@ class GraphAgent:
         )
         
         result = chain.invoke(query)
-        return str(result["result"])
+        return str(result["result"]), result
 
     #@tool
-    def text_to_nx_algorithm_to_text(self, query:str):
+    def nx_algorithm_coding_qa(self, query:str):
         """This tool is available to invoke a NetworkX Algorithm on
         the ArangoDB Graph. You are responsible for accepting the
         Natural Language Query, establishing which algorithm needs to
@@ -233,11 +237,19 @@ class GraphAgent:
             Your response:
         """).content
 
-        return nx_to_text
+        return nx_to_text, {'code': text_to_nx_final, 'attempt': attempt, 'result': FINAL_RESULT}
 
-    def vector_search(self, query):
-        pass
-
+    def vector_search(self, query: str):
+        retrieved_nodes = (self.table
+                    .search(query=query, query_type='hybrid')
+                    #.rerank(reranker=reranker) # not used for now, slow down the search
+                    .limit(self.top_k)
+                    .to_pandas()
+                    .drop(columns=['vector'])
+                    .drop_duplicates(subset=['description'], keep='first')
+                    )
+        return retrieved_nodes
+    
     # Note: Consider implementing a hybrid tool that combines both AQL & NetworkX Algorithms!
     def query_graph(self, query):
         # 
